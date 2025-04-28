@@ -1,0 +1,153 @@
+---
+title: "Graduation_Prediction"
+author: ""
+date: "2025-04-25"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Split into Train and Test Data
+
+```{r train}
+grad_data <- read.csv("data.csv", sep = ";")
+grad_data$Target <- as.factor(grad_data$Target)
+
+set.seed(1234)
+
+ind = sample(1:nrow(grad_data), size = (nrow(grad_data) * 0.8), replace = FALSE)
+
+train = grad_data[ind, ]
+test = grad_data[-ind, ]
+```
+
+## Decision Tree
+
+```{r tree}
+library(rpart)
+library(rpart.plot)
+library(caret)
+
+dat_rpart <- rpart(Target ~ . , data = train, method = 'class')
+tree_preds <- predict(dat_rpart, newdata = test, type = "class")
+
+confusionMatrix(tree_preds, test$Target)
+
+plotcp(dat_rpart)
+dat_rpart$cptable
+
+dat_min_cp = dat_rpart$cptable[which.min(dat_rpart$cptable[,"xerror"]),"CP"]
+dat_pruned <- prune(dat_rpart, cp = dat_min_cp)
+
+tree_preds_pruned <- predict(dat_pruned, newdata = test, type = "class")
+
+confusionMatrix(tree_preds_pruned, test$Target)
+
+rpart.plot(dat_rpart)
+rpart.plot(dat_pruned)
+```
+
+## Bagging Model
+
+```{r}
+library(randomForest)
+bagged_mod <- randomForest(Target ~ ., data = train, 
+                             mtry = ncol(train) - 1)
+
+bag_preds <- predict(bagged_mod, newdata = test, type = 'class')
+
+confusionMatrix(bag_preds, test$Target)
+```
+
+## Random Forest
+
+```{r}
+p <- ncol(train) - 1
+
+rf_mod <- randomForest(Target ~ ., data = train, mtry = floor(p/2), 
+                         importance = TRUE)
+varImpPlot(rf_mod)
+
+rf_preds <- predict(rf_mod, newdata = test, type = 'class')
+
+confusionMatrix(rf_preds, test$Target)
+```
+
+## Multinomial Logistic Regression
+
+```{r}
+library(glmnet)
+
+cv_model <- cv.glmnet(x = as.matrix(train[, -37]),
+                      y = train$Target,
+                      family = "multinomial")
+
+best_lambda <- cv_model$lambda.1se
+
+logit_preds <- predict(cv_model, 
+                 newx = as.matrix(test[, -37]), 
+                 type = "class", 
+                 s = best_lambda)
+
+confusionMatrix(as.factor(as.vector(logit_preds)), test$Target)
+```
+
+## SVM
+
+```{r}
+x_train <- train[-37]
+x_test <- test[,-37]
+
+y_train <- train$Target
+y_test <- test$Target
+
+library(e1071)
+
+svm_model <- svm(x = x_train, y = y_train, kernel = "linear", cost = 0.01)
+
+svm_preds <- predict(svm_model, x_test)
+
+confusionMatrix(svm_preds, y_test)
+```
+
+```{r}
+svm_tune <- tune(svm, Target ~ ., data = train, kernel = "linear",
+                 ranges = list(cost = c(0.01, 0.1, 1, 2, 5, 7, 10)))
+best_model <- svm_tune$best.model
+summary(best_model)
+
+svm_best_test_pred <- predict(best_model, test, type = 'class')
+
+confusionMatrix(svm_best_test_pred, test$Target)
+```
+
+```{r}
+radial_tune <- tune(svm, Target ~ ., data = train, kernel = "radial",
+                 ranges = list(cost = c(0.01, 0.1, 1, 2, 5)))
+best_radial <- radial_tune$best.model
+summary(best_radial)
+
+radial_best_test_pred <- predict(best_radial, test, type = 'class')
+
+confusionMatrix(radial_best_test_pred, test$Target)
+```
+
+```{r}
+poly_tune <- tune(svm, Target ~ ., data = train, kernel = "polynomial",
+                 ranges = list(cost = c(0.01, 0.1, 1, 2, 5),
+                               degree = c(2,3,4)))
+best_poly <- poly_tune$best.model
+summary(best_poly)
+
+poly_best_test_pred <- predict(best_poly, test, type = 'class')
+
+confusionMatrix(poly_best_test_pred, test$Target)
+```
+
+
+
+
+
+
