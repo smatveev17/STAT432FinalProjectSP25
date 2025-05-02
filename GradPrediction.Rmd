@@ -1,12 +1,10 @@
 ---
-title: "Graduation_Prediction"
-author: ""
-date: "2025-04-25"
 output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(eval = FALSE)
 ```
 
 ## Split into Train and Test Data
@@ -30,14 +28,16 @@ library(rpart)
 library(rpart.plot)
 library(caret)
 
+# Fit standard tree
 dat_rpart <- rpart(Target ~ . , data = train, method = 'class')
 tree_preds <- predict(dat_rpart, newdata = test, type = "class")
 
 confusionMatrix(tree_preds, test$Target)
 
-plotcp(dat_rpart)
+# Create CP Table
 dat_rpart$cptable
 
+# Find minimal cross validation error
 dat_min_cp = dat_rpart$cptable[which.min(dat_rpart$cptable[,"xerror"]),"CP"]
 dat_pruned <- prune(dat_rpart, cp = dat_min_cp)
 
@@ -45,6 +45,7 @@ tree_preds_pruned <- predict(dat_pruned, newdata = test, type = "class")
 
 confusionMatrix(tree_preds_pruned, test$Target)
 
+# Plot trees
 rpart.plot(dat_rpart)
 rpart.plot(dat_pruned)
 ```
@@ -53,31 +54,151 @@ rpart.plot(dat_pruned)
 
 ```{r}
 library(randomForest)
+# Fit Original Bag Model
 bagged_mod <- randomForest(Target ~ ., data = train, 
                              mtry = ncol(train) - 1)
+# Plot OOB Error
+plot(bagged_mod$err.rate[,1], type = 'l', ylab = "OOB Error", 
+     xlab = "Number of Trees")
 
 bag_preds <- predict(bagged_mod, newdata = test, type = 'class')
 
 confusionMatrix(bag_preds, test$Target)
+
 ```
 
+```{r}
+set.seed(7)
+# Fit Final Bagging Model
+bag_final <- randomForest(Target ~ ., data = train, mtry = p, 
+                         importance = TRUE, ntree = 25, nodesize = 3, nsplit = 1)
+
+bag_preds <- predict(bag_final, newdata = test, type = 'class', ntree = 25)
+
+confusionMatrix(bag_preds, test$Target)
+```
+
+\newpage
 ## Random Forest
 
 ```{r}
 p <- ncol(train) - 1
 
 rf_mod <- randomForest(Target ~ ., data = train, mtry = floor(p/2), 
-                         importance = TRUE)
+                         importance = TRUE, ntree = 100)
 varImpPlot(rf_mod)
+
+plot(rf_mod$err.rate[,1], type = 'l', ylab = "OOB Error", xlab = "Number of Trees")
 
 rf_preds <- predict(rf_mod, newdata = test, type = 'class')
 
 confusionMatrix(rf_preds, test$Target)
 ```
 
+```{r}
+library(randomForestSRC)
+
+# Define grid values
+nodesize_grid <- c(1:5)
+nsplit_grid <- c(1:8)
+
+# Create a data frame to store results
+results <- expand.grid(nodesize = nodesize_grid, nsplit = nsplit_grid)
+results$OOB_Error <- NA
+
+# Loop over combinations
+for (i in seq_len(nrow(results))) {
+  fit <- rfsrc(Target ~ ., data = train,
+               ntree = 25,
+               mtry = p,
+               nodesize = results$nodesize[i],
+               splitrule = "auc",
+               nsplit = results$nsplit[i],
+               importance = "random")
+  
+  results$OOB_Error[i] <- fit$err.rate[fit$ntree]
+}
+
+# Find best combination
+print(results[order(results$OOB_Error), ])
+
+```
+
+```{r}
+set.seed(7)
+# Fit final Random Forest
+rf_final <- randomForest(Target ~ ., data = train, mtry = floor(p/2), 
+                         importance = TRUE, ntree = 25, nodesize = 4, nsplit =8)
+# Predictions
+rf_preds <- predict(rf_final, newdata = test, type = 'class', ntree = 25)
+
+confusionMatrix(rf_preds, test$Target)
+varImpPlot(rf_final)
+
+```
+
+
+```{r echo=FALSE}
+library(caret)
+
+# Your existing confusion matrix
+cm <- confusionMatrix(as.factor(as.vector(logit_preds)), test$Target)
+
+# Extract the confusion matrix table
+cm_table <- cm$table
+
+# Get class-level precision, recall
+precision <- diag(cm_table) / colSums(cm_table)  # Positive Predictive Value
+recall <- diag(cm_table) / rowSums(cm_table)     # Sensitivity
+
+# F1 score per class
+f1_scores <- 2 * precision * recall / (precision + recall)
+
+# Macro F1: unweighted average of class F1s
+macro_f1 <- mean(f1_scores, na.rm = TRUE)
+
+# Micro F1: global TP, FP, FN
+TP <- sum(diag(cm_table))
+FP <- sum(colSums(cm_table)) - TP
+FN <- sum(rowSums(cm_table)) - TP
+
+micro_precision <- TP / (TP + FP)
+micro_recall <- TP / (TP + FN)
+micro_f1 <- 2 * micro_precision * micro_recall / (micro_precision + micro_recall)
+
+# Print results
+cat("Macro F1 Score:", round(macro_f1, 3), "\n")
+cat("Micro F1 Score:", round(micro_f1, 3), "\n")
+
+```
+
+
+
+```{r 1vall, echo = FALSE}
+train$DropoutBinary <- ifelse(train$Target == "Dropout", "Dropout", "NotDropout")
+test$DropoutBinary  <- ifelse(test$Target == "Dropout", "Dropout", "NotDropout")
+
+train$DropoutBinary <- as.factor(train$DropoutBinary)
+test$DropoutBinary <- as.factor(test$DropoutBinary)
+
+p <- ncol(train) - 2
+
+rf_mod_all <- randomForest(DropoutBinary ~ ., data = train[,-37], 
+                           mtry = floor(p/2), 
+                         importance = TRUE,
+                         ntree = 100)
+varImpPlot(rf_mod_all)
+
+rf_preds_all <- predict(rf_mod_all, newdata = test, type = 'class')
+
+confusionMatrix(rf_preds_all, test$DropoutBinary)
+```
+\newpage
+
 ## Multinomial Logistic Regression
 
 ```{r}
+set.seed(1234)
 library(glmnet)
 
 cv_model <- cv.glmnet(x = as.matrix(train[, -37]),
@@ -91,59 +212,79 @@ logit_preds <- predict(cv_model,
                  type = "class", 
                  s = best_lambda)
 
+logit_train <- predict(cv_model,
+                       newx = as.matrix(train[,-37]),
+                       type = 'class',
+                       s = best_lambda)
+
 confusionMatrix(as.factor(as.vector(logit_preds)), test$Target)
 ```
 
-## SVM
+\newpage
+```{r}
+# cv_model_all <- cv.glmnet(x = as.matrix(train[, -c(37:38)]),
+#                       y = train$DropoutBinary,
+#                       family = "binomial")
+# 
+# best_lambda <- cv_model_all$lambda.1se
+# 
+# logit_preds_all <- predict(cv_model_all, 
+#                  newx = as.matrix(test[, -c(37:38)]), 
+#                  type = "class", 
+#                  s = best_lambda)
+# 
+# confusionMatrix(as.factor(as.vector(logit_preds_all)), test$DropoutBinary)
+```
+
 
 ```{r}
-x_train <- train[-37]
-x_test <- test[,-37]
-
-y_train <- train$Target
-y_test <- test$Target
-
-library(e1071)
-
-svm_model <- svm(x = x_train, y = y_train, kernel = "linear", cost = 0.01)
-
-svm_preds <- predict(svm_model, x_test)
-
-confusionMatrix(svm_preds, y_test)
+# x_train <- train[-37]
+# x_test <- test[,-37]
+# 
+# y_train <- train$Target
+# y_test <- test$Target
+# 
+# library(e1071)
+# 
+# svm_model <- svm(x = x_train, y = y_train, kernel = "linear", cost = 0.01)
+# 
+# svm_preds <- predict(svm_model, x_test)
+# 
+# confusionMatrix(svm_preds, y_test)
 ```
 
 ```{r}
-svm_tune <- tune(svm, Target ~ ., data = train, kernel = "linear",
-                 ranges = list(cost = c(0.01, 0.1, 1, 2, 5, 7, 10)))
-best_model <- svm_tune$best.model
-summary(best_model)
-
-svm_best_test_pred <- predict(best_model, test, type = 'class')
-
-confusionMatrix(svm_best_test_pred, test$Target)
+# svm_tune <- tune(svm, Target ~ ., data = train, kernel = "linear",
+#                  ranges = list(cost = c(0.01, 0.1, 1, 2, 5, 7, 10)))
+# best_model <- svm_tune$best.model
+# summary(best_model)
+# 
+# svm_best_test_pred <- predict(best_model, test, type = 'class')
+# 
+# confusionMatrix(svm_best_test_pred, test$Target)
 ```
 
 ```{r}
-radial_tune <- tune(svm, Target ~ ., data = train, kernel = "radial",
-                 ranges = list(cost = c(0.01, 0.1, 1, 2, 5)))
-best_radial <- radial_tune$best.model
-summary(best_radial)
-
-radial_best_test_pred <- predict(best_radial, test, type = 'class')
-
-confusionMatrix(radial_best_test_pred, test$Target)
+# radial_tune <- tune(svm, Target ~ ., data = train, kernel = "radial",
+#                  ranges = list(cost = c(0.01, 0.1, 1, 2, 5)))
+# best_radial <- radial_tune$best.model
+# summary(best_radial)
+# 
+# radial_best_test_pred <- predict(best_radial, test, type = 'class')
+# 
+# confusionMatrix(radial_best_test_pred, test$Target)
 ```
 
 ```{r}
-poly_tune <- tune(svm, Target ~ ., data = train, kernel = "polynomial",
-                 ranges = list(cost = c(0.01, 0.1, 1, 2, 5),
-                               degree = c(2,3,4)))
-best_poly <- poly_tune$best.model
-summary(best_poly)
-
-poly_best_test_pred <- predict(best_poly, test, type = 'class')
-
-confusionMatrix(poly_best_test_pred, test$Target)
+# poly_tune <- tune(svm, Target ~ ., data = train, kernel = "polynomial",
+#                  ranges = list(cost = c(0.01, 0.1, 1, 2, 5),
+#                                degree = c(2,3,4)))
+# best_poly <- poly_tune$best.model
+# summary(best_poly)
+# 
+# poly_best_test_pred <- predict(best_poly, test, type = 'class')
+# 
+# confusionMatrix(poly_best_test_pred, test$Target)
 ```
 
 
